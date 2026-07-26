@@ -1,0 +1,160 @@
+requirements_analyst: llama-3.1-8b-instant | composite=71.74 | quality=100.0 | latency=2739.0ms | cost=$0.000163
+test_designer: llama-3.1-8b-instant | composite=65.67 | quality=100.0 | latency=4971.8ms | cost=$0.000173
+security_reviewer: llama-3.1-8b-instant | composite=60.42 | quality=68.0 | latency=14744.4ms | cost=$1.9e-05
+qa_reviewer: canopylabs/orpheus-arabic-saudi | composite=68.84 | quality=100.0 | latency=4392.4ms | cost=$5.8e-05
+
+==================== REQUIREMENTS ANALYST ====================
+
+**Actors**  
+| Actor | Role | Notes |
+|-------|------|-------|
+| Registered Customer | Initiator | Requests password reset |
+| System (Password‑Reset Service) | Processor | Generates token, sends email, validates link |
+| Email Service | Delivery | Sends reset email |
+| Business Team | Decision‑maker | Provides policy on account lock and password rules |
+
+---
+
+### Business Rules (as stated)
+
+| # | Rule | Source |
+|---|------|--------|
+| 1 | Reset link expires **15 min** after issuance. | Requirement |
+| 2 | Link is single‑use; cannot be reused after first successful reset. | Requirement |
+| 3 | Success message displayed immediately after request submission. | Requirement |
+| 4 | Email contains a **secure reset token**. | Requirement |
+| 5 | Password policy is *subject to change* (no current constraints). | Requirement |
+| 6 | Reset link expires **10 min** and also “remain valid for 15 min.” | Requirement |
+| 7 | If the account is *temporarily locked*, the reset link still works. | Requirement |
+
+---
+
+### Acceptance Criteria (derived)
+
+| # | Criterion | Expected Result |
+|---|-----------|-----------------|
+| 1 | When a registered customer requests a reset, the system immediately shows a success message. | Success message displayed; no delay. |
+| 2 | The system sends an email containing a secure token. | Email received; token is cryptographically random and not guessable. |
+| 3 | The reset link is usable only once. | First use succeeds; subsequent clicks fail with “link already used.” |
+| 4 | The reset link expires after the defined time window. | After expiry, clicking the link shows “link expired.” |
+| 5 | A temporarily locked account can still reset password via the link. | Reset flow proceeds normally for locked accounts. |
+
+> **Note:** Criteria 4 is ambiguous because two expiration windows are specified (10 min vs 15 min). A single, unambiguous rule must be chosen.
+
+---
+
+### Risks & Implications
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| **Conflicting expiration times** (10 min vs 15 min) | Inconsistent behavior; security loophole. | Clarify rule with business; implement single expiry. |
+| **Unspecified password policy** | Security gaps; test coverage incomplete. | Document current policy; design tests to be adaptable. |
+| **Token security** | Potential brute‑force or replay attacks. | Use strong random generator, HTTPS, and single‑use validation. |
+| **Time synchronization** | Expiry may be inaccurate if server clock off. | Use NTP; store timestamps in UTC. |
+| **Account lock handling** | Unexpected denial of reset for locked accounts. | Verify lock status logic; ensure reset bypasses lock. |
+
+---
+
+### Dependencies
+
+1. **Email delivery infrastructure** – must reliably deliver reset emails.  
+2. **Token generation & storage** – secure, single‑use, time‑stamped.  
+3. **User account status service** – provides lock state.  
+4. **Time source** – NTP or equivalent for accurate expiry.  
+5. **Password policy service** – may change; tests must be adaptable.
+
+---
+
+### Ambiguous / Unresolved Requirements
+
+1. **Expiration window** – “expire after 10 min and also remain valid for 15 min.”  
+2. **Password rules** – “still being finalized and may change.”  
+3. **Definition of “temporarily locked”** – criteria, duration, and how it interacts with reset flow.  
+4. **Success message timing** – “immediately after the request is submitted” – does this mean before email is sent?  
+5. **Token security specifics** – size, algorithm, transport security.
+
+---
+
+**Next Steps for QA**  
+- Request clarification on the expiration rule and password policy.  
+- Confirm the definition of a temporarily locked account.  
+- Define test data for both locked and unlocked scenarios.  
+- Prepare test cases for single‑use token validation and expiry handling.
+
+==================== TEST DESIGNER ====================
+
+| ID   | Scenario | Preconditions | Steps | Expected Result | Test Type | Priority |
+|------|----------|---------------|-------|-----------------|-----------|----------|
+| **TC001** | Success message appears immediately after reset request | User has a registered account | 1. Navigate to *Forgot‑Password* page.<br>2. Enter registered email.<br>3. Click **Submit** | Success message “Reset link sent” is displayed instantly (no delay). | Functional | P1 |
+| **TC002** | Email with secure token is sent | Same as TC001 | 1‑3 as TC001.<br>4. Check inbox for reset email. | Email arrives within 2 min, contains a link with a cryptographically random token (≥128 bits). | Functional | P1 |
+| **TC003** | Reset link is single‑use | Same as TC001 | 1‑3 as TC001.<br>4. Click link → set new password.<br>5. Click same link again. | First click succeeds; second click shows “Link already used.” | Functional | P1 |
+| **TC004** | Link expires after 15 min (boundary) | Same as TC001 | 1‑3 as TC001.<br>4. Wait 14 min 59 s.<br>5. Click link. | Link works. <br>6. Wait 15 min 01 s.<br>7. Click link. | “Link expired.” | Boundary | P1 |
+| **TC005** | Link expires after 10 min (alternate rule) | Same as TC001 | 1‑3 as TC001.<br>4. Wait 9 min 59 s.<br>5. Click link. | Link works. <br>6. Wait 10 min 01 s.<br>7. Click link. | “Link expired.” | Boundary | P1 |
+| **TC006** | Link works for temporarily locked account | Account is locked (e.g., 5 failed logins). | 1‑3 as TC001.<br>4. Click link. | Reset flow proceeds normally; user can set new password. | Functional | P1 |
+| **TC007** | Token is unique per request | Same as TC001 | 1. Request reset → capture token A.<br>2. Request reset again → capture token B.<br>3. Verify A ≠ B. | Tokens are distinct and not guessable. | Security | P2 |
+| **TC008** | Token length meets security threshold | Same as TC001 | 1‑3 as TC001.<br>4. Inspect token length. | Token ≥ 32 characters (≥128 bits). | Security | P2 |
+| **TC009** | Invalid token is rejected | Same as TC001 | 1. Modify token in link (e.g., change a character).<br>2. Click link. | System shows “Invalid or expired link.” | Negative | P1 |
+| **TC010** | Expired token is rejected | Same as TC001 | 1‑3 as TC001.<br>4. Wait 16 min.<br>5. Click link. | System shows “Link expired.” | Negative | P1 |
+| **TC011** | Re‑using an expired token is rejected | Same as TC001 | 1‑3 as TC001.<br>4. Wait 16 min.<br>5. Click link → “Link expired.”<br>6. Click same link again. | Same “Link expired.” message. | Negative | P1 |
+| **TC012** | Email service failure does not block success message | Email service is down (mock). | 1. Request reset.<br>2. Observe UI. | Success message still displayed; system logs error. | Failure | P2 |
+| **TC013** | Token generation failure results in error | Token generator throws exception (mock). | 1. Request reset.<br>2. Observe UI. | System shows generic error “Unable to process request.” | Failure | P1 |
+| **TC014** | Time‑synchronization drift causes premature expiry | Server clock is +5 min ahead (mock). | 1‑3 as TC001.<br>4. Wait 10 min (real time).<br>5. Click link. | System shows “Link expired.” (premature). | Failure | P1 |
+| **TC015** | Password change succeeds with any value (policy not enforced) | Same as TC001 | 1‑3 as TC001.<br>4. Click link → set password “abc”. | Password updated, user redirected to login. | Functional | P2 |
+| **TC016** | Password change fails when password is empty | Same as TC001 | 1‑3 as TC001.<br>4. Click link → leave password blank. | System shows “Password cannot be empty.” | Negative | P2 |
+| **TC017** | Reset link is not usable after account deletion | Account is deleted after request. | 1‑3 as TC001.<br>4. Delete account via admin console.<br>5. Click link. | System shows “Account not found.” | Negative | P1 |
+| **TC018** | Reset link is not usable after account deactivation | Account is deactivated (but not deleted). | 1‑3 as TC001.<br>4. Deactivate account via admin console.<br>5. Click link. | System shows “Account inactive.” | Negative
+
+==================== SECURITY REVIEWER ====================
+
+## Security & Privacy Review – Password‑Reset Flow
+
+| Category | Risk | Impact | Likely Cause | Mitigation / Recommendation |
+|----------|------|--------|--------------|-----------------------------|
+| **Conflicting / Vague Requirements** | Two expiration windows (10 min + 15 min) | Inconsistent behavior → potential security loophole | Ambiguous wording | Clarify with business: choose a single, unambiguous expiry (e.g., “15 minutes after issuance”). |
+| | Password policy “subject to change” | Weak passwords → account compromise | Undefined constraints | Document current policy, expose it via a policy‑service API, and design tests to be policy‑agnostic. |
+| | “Temporarily locked” definition | Unclear when reset is allowed | Undefined lock state | Define lock duration, lock reason, and how it interacts with reset logic. |
+| | Success‑message timing | UI may reveal whether email exists | Timing side‑channel | Show generic “If an account exists, a reset link has been sent” message. |
+| | Token security specifics | Token may be guessable or replayable | No size/algorithm defined | Use a 128‑bit (≥32‑char) cryptographically random token, store a hash, and transmit over HTTPS only. |
+| | Email content | Phishing risk, token exposure | Plain‑text email | Use secure email templates, avoid embedding the token in the subject, and consider a “click‑through” link that redirects to a secure page. |
+| | Account lock handling | Reset may bypass lock → account takeover | Business rule | Ensure lock status is checked *after* token validation but *before* password change; log the event. |
+| | Time‑synchronization | Premature expiry or never‑expire | Server clock drift | Use NTP, store timestamps in UTC, and validate against server time. |
+| | Token revocation on account deletion/deactivation | Token may still be usable | No revocation logic | Invalidate or delete token when account is deleted or deactivated. |
+| | Token in URL | URL may be logged, cached, or leaked | Browser history, server logs | Encode token in a POST form or use a short‑lived, single‑use link; avoid storing token in logs. |
+| | Session handling after reset | Old sessions may remain valid → session fixation | No session invalidation | Invalidate all existing sessions on password change; issue a new session cookie with `HttpOnly`, `Secure`, `SameSite=Strict`. |
+| | Error messages | Information leakage (e.g., “account not found”) | Detailed error responses | Return generic “Invalid or expired link” for all failure cases. |
+| | Rate‑limiting | Brute‑force token guessing | No throttling | Limit reset requests per IP/account (e.g., 5 per hour). |
+| | Audit trail | Lack of forensic evidence | No logging | Log token generation, usage, expiry, failures, and account lock status changes. |
+| | Email delivery failure | User may not receive link → denial of service | Email service outage | Retry mechanism, fallback to SMS/phone if available, and notify user of delivery status. |
+| | Token storage | Plain‑text token in DB → data breach | No hashing | Store a salted hash of the token; compare hashes on validation. |
+| | Token length | Short token → brute‑force | No minimum length | Enforce ≥128‑bit entropy (≥32 ASCII chars). |
+| | CSRF protection | Reset form may be hijacked | No CSRF token | Require a CSRF token on the reset form. |
+| | Privacy of email address | Email address may be exposed in logs | Logging raw request data | Mask or hash email addresses in logs; avoid logging the full address. |
+| | GDPR / CCPA compliance | Personal data handling | No data‑retention policy | Retain token only until expiry or use; delete after use. |
+| | Session fixation | New session may be hijacked | No session regeneration | Regenerate session ID after password reset. |
+| | Token leakage via browser history | Token may be stored in history | URL usage | Prefer POST or short‑lived link; advise users to delete history. |
+| | Token replay after expiry | Replay attack if token not invalidated | No single‑use enforcement | Mark token as used immediately after first successful reset. |
+| | Email content privacy | Email may be intercepted | No encryption | Use TLS for email transport (STARTTLS) and consider PGP/
+
+==================== QA REVIEWER ====================
+
+**REVISE**
+
+The test set covers most of the functional requirements, but several critical edge‑cases and business‑risk scenarios are missing or duplicated:
+
+| Issue | Why it matters | Suggested addition |
+|-------|----------------|--------------------|
+| **Ambiguous expiry rule** | Two conflicting times (10 min vs 15 min) are tested separately (TC004 & TC005). Until the rule is clarified, the tests should be consolidated or marked as “pending clarification.” | Add a note that the test will be updated once the expiry policy is confirmed. |
+| **Rate‑limiting** | Brute‑force or abuse of the reset endpoint can lead to denial‑of‑service or account compromise. | Add a test that verifies the system limits reset requests per IP/account. |
+| **Session handling** | After a password reset, existing sessions may remain valid, exposing the account to session‑fixation attacks. | Add a test that ensures all active sessions are invalidated and a new session is issued. |
+| **CSRF protection** | The reset form could be hijacked if no CSRF token is required. | Add a test that verifies a CSRF token is required on the reset form. |
+| **Generic error messages** | Detailed errors (“Account not found”, “Link already used”) can leak information. | Add a test that verifies all failure paths return a generic “Invalid or expired link” message. |
+| **Audit trail** | Lack of logging makes forensic investigation difficult. | Add a test that verifies token generation, usage, expiry, and failures are logged. |
+| **Success‑message wording** | The requirement specifies “immediately after request submission,” but the wording could reveal whether an account exists. | Add a test that verifies the success message is generic (e.g., “If an account exists, a reset link has been sent”). |
+
+Once these gaps are addressed, the test suite will provide comprehensive coverage of both functional and security‑critical aspects of the password‑reset flow.
+
+Selected models:
+- requirements_analyst: llama-3.1-8b-instant (composite=71.74)
+- test_designer: llama-3.1-8b-instant (composite=65.67)
+- security_reviewer: llama-3.1-8b-instant (composite=60.42)
+- qa_reviewer: canopylabs/orpheus-arabic-saudi (composite=68.84)
